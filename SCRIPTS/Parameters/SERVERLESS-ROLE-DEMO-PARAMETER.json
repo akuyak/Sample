@@ -1,0 +1,7 @@
+[
+    {
+        "ParameterKey": "ServerlessCICDDemoRole",
+        "ParameterValue": "LambdaDemoRole"
+    }
+]
+

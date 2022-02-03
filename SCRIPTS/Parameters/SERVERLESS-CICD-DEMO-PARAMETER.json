@@ -1,0 +1,19 @@
+[
+    {
+        "ParameterKey": "BranchName",
+        "ParameterValue": "master"
+    },
+    {
+        "ParameterKey": "BucketName",
+        "ParameterValue": "serverless-cicd-demo-bucket"
+    },
+    {
+        "ParameterKey": "Email1",
+        "ParameterValue": "varun.pathy@accenture.com"
+    },
+    {
+        "ParameterKey": "ServiceName",
+        "ParameterValue": "serverless-cicd-demo-service"
+    }
+]
+

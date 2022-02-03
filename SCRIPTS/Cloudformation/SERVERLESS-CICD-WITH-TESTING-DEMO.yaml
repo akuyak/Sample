@@ -1,0 +1,446 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Serverless CI/CD sample
+Parameters:
+  ServiceName:
+    Type: String
+    Description: >-
+      Name for the service, used in the code repository, Lambda function, and
+      pipeline names
+  BucketName:
+    Type: String
+    Description: Name for the repo for code build project & resources
+  Email1:
+    Type: String
+    Description: Mailid for user to receive alerts & notifications
+  BranchName:
+    Type: String
+    Description: Name of Repo branch for gitflow integration
+Resources:
+  CodeRepository:
+    Type: 'AWS::CodeCommit::Repository'
+    Properties:
+      RepositoryName: !Sub '${ServiceName}_repo'
+      RepositoryDescription: !Sub 'Repository for the ${ServiceName} service'
+  BuildArtifactsBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref BucketName
+  CodeBuildServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Resource:
+                  - '*'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+              - Effect: Allow
+                Resource:
+                  - '*'
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:PutObject'
+  CodeBuildProject:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Name: !Sub '${ServiceName}_build'
+      Description: Build project for the Lambda service
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: 'aws/codebuild/eb-java-8-amazonlinux-64:2.1.3'
+        EnvironmentVariables:
+          - Name: BUILD_OUTPUT_BUCKET
+            Value: !Ref BuildArtifactsBucket
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Source:
+        Type: CODEPIPELINE
+  CodeBuildProjectForJunit:
+    Description: AWS CodeBuild project to build the Source Code
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Name: !Sub '${ServiceName}_junit'
+      Description: Junit Project for Lambda Service
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: 'aws/codebuild/eb-java-8-amazonlinux-64:2.1.3'
+        Type: LINUX_CONTAINER
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec-junit.yml
+      Tags:
+        - Key: Name
+          Value: !Sub '${ServiceName}_junitbuild'
+  CFNPipelinePolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      Description: CloudFormation Pipeline Execution Policy
+      Path: /
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Effect: Allow
+          Action:
+            - 'cloudformation:CreateStack'
+            - 'cloudformation:DescribeStacks'
+            - 'cloudformation:DeleteStack'
+            - 'cloudformation:UpdateStack'
+            - 'cloudformation:CreateChangeSet'
+            - 'cloudformation:ExecuteChangeSet'
+            - 'cloudformation:DeleteChangeSet'
+            - 'cloudformation:DescribeChangeSet'
+            - 'cloudformation:SetStackPolicy'
+            - 'cloudformation:SetStackPolicy'
+            - 'cloudformation:ValidateTemplate'
+            - 'codebuild:StartBuild'
+            - 'codebuild:BatchGetBuilds'
+          Resource: '*'
+  CloudFormationExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Action:
+            - 'sts:AssumeRole'
+          Effect: Allow
+          Principal:
+            Service:
+              - cloudformation.amazonaws.com
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AdministratorAccess'
+  PipelineExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AWSCodeCommitFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - !Ref CFNPipelinePolicy
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - 'iam:PassRole'
+                  - 'lambda:InvokeFunction'
+                  - 'lambda:ListFunctions'
+                  - 'lambda:InvokeAsyc'
+                Effect: Allow
+                Resource: '*'
+  Pipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      ArtifactStore:
+        Location: !Ref BuildArtifactsBucket
+        Type: S3
+      Name: !Sub '${ServiceName}_pipeline'
+      RoleArn: !GetAtt PipelineExecutionRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: CodeCommitRepo
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: 1
+              Configuration:
+                RepositoryName: !Sub '${ServiceName}_repo'
+                BranchName: !Ref BranchName
+              OutputArtifacts:
+                - Name: SourceZip
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: CodeBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: SourceZip
+              OutputArtifacts:
+                - Name: BuiltZip
+        - Name: UnitTesting
+          Actions:
+            - Name: UnitTesting
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              Configuration:
+                ProjectName: !Ref CodeBuildProjectForJunit
+              InputArtifacts:
+                - Name: SourceZip
+              OutputArtifacts:
+                - Name: JunitZip
+        - Name: DEMO
+          Actions:
+            - Name: DeploymentApproval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: 1
+              RunOrder: 1
+            - Name: CreateChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: 1
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                RoleArn: !GetAtt CloudFormationExecutionRole.Arn
+                StackName: !Sub '${ServiceName}-Stack-DEMO'
+                ChangeSetName: !Sub '${ServiceName}-ChangeSet-DEMO'
+                TemplatePath: 'BuiltZip::app-output_sam.yaml'
+                Capabilities: CAPABILITY_IAM
+                ParameterOverrides: '{ "Stage": "demo" }'
+              InputArtifacts:
+                - Name: BuiltZip
+              RunOrder: 1
+            - Name: ExecuteChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: 1
+              Configuration:
+                ActionMode: CHANGE_SET_EXECUTE
+                RoleArn: !GetAtt CloudFormationExecutionRole.Arn
+                StackName: !Sub '${ServiceName}-Stack-DEMO'
+                ChangeSetName: !Sub '${ServiceName}-ChangeSet-DEMO'
+              OutputArtifacts:
+                - Name: !Sub '${ServiceName}ChangeSet'
+              RunOrder: 2
+  SNSTopicForPipelineNotifications:
+    Description: SNS Topic for Pipeline Event notifications.
+    Type: 'AWS::SNS::Topic'
+  SNSTopicPolicyForCWEvents:
+    Description: SNS topic policy to let CloudWatch Events send notifications to the topic.
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      PolicyDocument:
+        Id: SNSTopicPolicyForCWE
+        Version: 2012-10-17
+        Statement:
+          - Sid: TrustCWEToPublishEventsToMyTopic
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: 'sns:Publish'
+            Resource: !Sub '${SNSTopicForPipelineNotifications}'
+      Topics:
+        - !Ref SNSTopicForPipelineNotifications
+  SNSTopicSubscription:
+    Description: >-
+      Create a subscription to the SNS topic. The user has to confirm the
+      subscription.
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      TopicArn: !Ref SNSTopicForPipelineNotifications
+      Protocol: email
+      Endpoint: !Ref Email1
+  CloudWatchEventRuleForSource:
+    Description: >-
+      CloudWatch Event Rule to trigger the SNS Notification once sonar analysis
+      gets completed
+    Type: 'AWS::Events::Rule'
+    Properties:
+      EventPattern:
+        source:
+          - aws.codepipeline
+        detail-type:
+          - CodePipeline Stage Execution State Change
+        detail:
+          stage:
+            - Source
+          state:
+            - STARTED
+            - SUCCEEDED
+            - FAILED
+            - RESUMED
+            - CANCELED
+          pipeline:
+            - !Sub '${ServiceName}_pipeline'
+      State: ENABLED
+      Targets:
+        - Arn: !Ref SNSTopicForPipelineNotifications
+          Id: SNSTargetForPipelineEvents
+          InputTransformer:
+            InputPathsMap:
+              pipeline: $.detail.pipeline
+              stage: $.detail.stage
+              state: $.detail.state
+            InputTemplate: >
+              "<stage> status <state>."
+
+              "------------------------------------------------------------------------------------"
+
+              "Demo CodeCommit Repo Source Commit's/Checkin's"
+  CloudWatchEventRuleForBuild:
+    Description: >-
+      CloudWatch Event Rule to trigger the SNS Notification once Code build gets
+      completed
+    Type: 'AWS::Events::Rule'
+    Properties:
+      EventPattern:
+        source:
+          - aws.codebuild
+        detail-type:
+          - CodeBuild Build Phase Change
+        detail:
+          completed-phase:
+            - BUILD
+          completed-phase-status:
+            - TIMED_OUT
+            - STOPPED
+            - FAILED
+            - SUCCEEDED
+            - FAULT
+            - CLIENT_ERROR
+          project-name:
+            - !Ref CodeBuildProject
+      State: ENABLED
+      Targets:
+        - Arn: !Ref SNSTopicForPipelineNotifications
+          Id: SNSTargetForPipelineEvents
+          InputTransformer:
+            InputPathsMap:
+              build-id: $.detail.build-id
+              project-name: $.detail.project-name
+              completed-phase: $.detail.completed-phase
+              completed-phase-status: $.detail.completed-phase-status
+            InputTemplate: >
+              "Demo Build has completed the build phase <completed-phase> with
+              status <completed-phase-status>."
+
+              "------------------------------------------------------------------------------------"
+  CloudWatchEventRuleForJunitDEV:
+    Description: >-
+      CloudWatch Event Rule to trigger the SNS Notification once Unit Testing
+      analysis gets completed
+    Type: 'AWS::Events::Rule'
+    Properties:
+      EventPattern:
+        source:
+          - aws.codepipeline
+        detail-type:
+          - CodePipeline Stage Execution State Change
+        detail:
+          stage:
+            - JunitAnalysis
+          state:
+            - STARTED
+            - SUCCEEDED
+            - FAILED
+            - RESUMED
+            - CANCELED
+          pipeline:
+            - !Sub '${ServiceName}_pipeline'
+      State: ENABLED
+      Targets:
+        - Arn: !Ref SNSTopicForPipelineNotifications
+          Id: SNSTargetForPipelineEvents
+          InputTransformer:
+            InputPathsMap:
+              pipeline: $.detail.pipeline
+              stage: $.detail.stage
+              state: $.detail.state
+            InputTemplate: >
+              "<stage> status <state>."
+
+              "------------------------------------------------------------------------------------"
+
+              "DEMO UNIT TEST"
+  CloudWatchEventRuleForDEV:
+    Description: >-
+      CloudWatch Event Rule to trigger the SNS Notification once DEV state gets
+      completed
+    Type: 'AWS::Events::Rule'
+    Properties:
+      EventPattern:
+        source:
+          - aws.codepipeline
+        detail-type:
+          - CodePipeline Stage Execution State Change
+        detail:
+          stage:
+            - DEV
+          state:
+            - STARTED
+            - SUCCEEDED
+            - FAILED
+            - RESUMED
+            - CANCELED
+          pipeline:
+            - !Sub '${ServiceName}_pipeline'
+      State: ENABLED
+      Targets:
+        - Arn: !Ref SNSTopicForPipelineNotifications
+          Id: SNSTargetForPipelineEvents
+          InputTransformer:
+            InputPathsMap:
+              stage: $.detail.stage
+              state: $.detail.state
+            InputTemplate: >
+              "<stage> status <state>."
+
+              "------------------------------------------------------------------------------------"
+
+              "DEMO CI/CD Lambda's Deployment"
+Outputs:
+  CodeCommitRepoUrl:
+    Description: ServerlessDemo CodeCommit repository clone URL
+    Value: !GetAtt CodeRepository.Name
+    Export:
+      Name: ServerlessCodeCommitDemo
+  CodePipelineName:
+    Description: CodePipeline name
+    Value: !Ref Pipeline
+    Export:
+      Name: ServerlessCodePipelineDemo
+  BuildArtifactsBucketName:
+    Description: BuildArtifactsBucket name
+    Value: !Ref BuildArtifactsBucket
+    Export:
+      Name: ServerlessBucketDemo

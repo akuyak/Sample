@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS CloudFormation template to create IAM roles for Lambda Functions with Managed Policies for Serverless CICD Demo.
+Parameters:
+  ServerlessCICDDemoRole:
+    Description: Lambda Role for Serverless CICD Demo
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+    Default: LambdaDemoRole
+  
+Resources:
+ RoleforServerlessCICD:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref ServerlessCICDDemoRole
+      Description: Sample Role for Lambda Execution with Sereverless CICD
+      Path: /
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaENIManagementAccess
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+#      Policies:
+#        - PolicyName: KMSDecrypt
+#          PolicyDocument:
+#            Version: "2012-10-17"
+#            Statement:
+#              - Effect: Allow
+#                Action: 
+#                  - 'kms:*'
+#                Resource: '*'
+#                Sid: VisualEditor0
+
+Outputs:
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
+    Export:
+      Name: ServerlessLambdaDemoRoleStack
+    
+  DevOpsRoleforServerlessCICD:
+    Description: DevOps Role for Serverless CICD Demo
+    Value:
+      Fn::GetAtt:
+        - RoleforServerlessCICD
+        - Arn
+    Export:
+      Name: ServerlessLambdaDemoRole
+      
+
